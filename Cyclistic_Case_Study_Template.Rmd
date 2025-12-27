@@ -1,0 +1,217 @@
+---
+title: "Cyclistic Bike-Share Case Study (Divvy Q1 2019 + Q1 2020)"
+author: "Caleb"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+## 1. Ask
+
+### Business task
+**Goal:** Understand how **casual riders** and **annual members** use Cyclistic bikes differently, and recommend strategies to convert casual riders into members.
+
+### Key stakeholders
+- Lily Moreno (Director of Marketing)
+- Cyclistic Marketing Analytics Team
+- Cyclistic Executive Team
+
+## 2. Prepare
+
+### Data sources
+This analysis uses the two CSV files provided in the case study:
+- `Divvy_Trips_2019_Q1.csv`
+- `Divvy_Trips_2020_Q1.csv`
+
+### Tools
+- R (Posit Cloud)
+- Packages: `tidyverse`, `lubridate`, `janitor`
+
+## 3. Process
+
+```r
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+library(tidyverse)
+library(lubridate)
+library(janitor)
+```
+
+### Import data
+```{r import}
+q1_2019 <- readr::read_csv("Divvy_Trips_2019_Q1.csv")
+q1_2020 <- readr::read_csv("Divvy_Trips_2020_Q1.csv")
+
+glimpse(q1_2019)
+glimpse(q1_2020)
+```
+
+### Standardize column names and rider types
+```{r standardize}
+# 2019 format -> standard
+rides_2019 <- q1_2019 %>%
+  mutate(
+    started_at = ymd_hms(start_time),
+    ended_at   = ymd_hms(end_time),
+    ride_length_seconds = as.numeric(difftime(ended_at, started_at, units = "secs")),
+    member_casual = recode(usertype,
+                           "Subscriber" = "member",
+                           "Customer"   = "casual",
+                           .default = NA_character_)
+  ) %>%
+  transmute(
+    ride_id = as.character(trip_id),
+    started_at, ended_at,
+    start_station_name = from_station_name,
+    end_station_name   = to_station_name,
+    member_casual,
+    ride_length_seconds,
+    source_file = "2019_Q1"
+  )
+
+# 2020 format -> standard
+rides_2020 <- q1_2020 %>%
+  mutate(
+    started_at = ymd_hms(started_at),
+    ended_at   = ymd_hms(ended_at),
+    ride_length_seconds = as.numeric(difftime(ended_at, started_at, units = "secs"))
+  ) %>%
+  transmute(
+    ride_id = as.character(ride_id),
+    started_at, ended_at,
+    start_station_name,
+    end_station_name,
+    member_casual,
+    ride_length_seconds,
+    source_file = "2020_Q1"
+  )
+
+rides <- bind_rows(rides_2019, rides_2020)
+```
+
+### Clean data
+Common cleaning rules for this case study:
+- remove missing rider type / timestamps
+- remove rides with non-positive duration
+- remove rides longer than 24 hours (likely data errors)
+- remove rides under 1 minute (often docking/tests)
+
+```{r clean}
+rides_clean <- rides %>%
+  filter(
+    !is.na(member_casual),
+    !is.na(started_at),
+    !is.na(ended_at),
+    !is.na(ride_length_seconds),
+    ride_length_seconds > 0,
+    ride_length_seconds <= 86400
+  ) %>%
+  mutate(ride_length_minutes = ride_length_seconds / 60) %>%
+  filter(ride_length_minutes >= 1) %>%
+  mutate(
+    day_of_week = wday(started_at, label = TRUE, week_start = 1), # Mon = 1
+    hour = hour(started_at),
+    month = format(started_at, "%Y-%m"),
+    is_weekend = day_of_week %in% c("Sat", "Sun")
+  )
+
+summary(rides_clean$ride_length_minutes)
+```
+
+## 4. Analyze
+
+### Overall usage (members vs casual)
+```{r overall_summary}
+overall_summary <- rides_clean %>%
+  group_by(member_casual) %>%
+  summarise(
+    rides = n(),
+    avg_ride_min = mean(ride_length_minutes),
+    median_ride_min = median(ride_length_minutes),
+    p90_ride_min = quantile(ride_length_minutes, 0.90),
+    .groups = "drop"
+  ) %>%
+  mutate(share = rides / sum(rides))
+
+overall_summary
+```
+
+### Rides by day of week
+```{r dow_summary}
+dow_summary <- rides_clean %>%
+  group_by(member_casual, day_of_week) %>%
+  summarise(
+    rides = n(),
+    avg_ride_min = mean(ride_length_minutes),
+    .groups = "drop"
+  )
+
+dow_summary
+```
+
+```{r dow_plot}
+ggplot(dow_summary, aes(x = day_of_week, y = rides, fill = member_casual)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Rides by day of week (members vs casual)",
+    x = "Day of week",
+    y = "Number of rides",
+    fill = "Rider type"
+  )
+```
+
+### Rides by hour of day
+```{r hour_summary}
+hour_summary <- rides_clean %>%
+  group_by(member_casual, hour) %>%
+  summarise(rides = n(), .groups = "drop")
+
+ggplot(hour_summary, aes(x = hour, y = rides, color = member_casual)) +
+  geom_line() +
+  labs(
+    title = "Rides by hour of day (members vs casual)",
+    x = "Hour (0-23)",
+    y = "Number of rides",
+    color = "Rider type"
+  )
+```
+
+### Weekend vs weekday behavior
+```{r weekend_summary}
+weekend_summary <- rides_clean %>%
+  group_by(member_casual, is_weekend) %>%
+  summarise(
+    rides = n(),
+    avg_ride_min = mean(ride_length_minutes),
+    .groups = "drop"
+  ) %>%
+  group_by(member_casual) %>%
+  mutate(share_within_type = rides / sum(rides)) %>%
+  ungroup()
+
+weekend_summary
+```
+
+## 5. Share
+
+### Key insights (write these after reviewing the results)
+- Members tend to ride more during commute hours (morning and late afternoon).
+- Casual riders tend to ride longer and ride more on weekends.
+- These patterns suggest members use the service for routine transportation, while casual riders are more recreational.
+
+## 6. Act
+
+### Recommendations (top 3)
+1. **Weekend conversion offers:** Target casual riders on Saturdays/Sundays with limited-time membership discounts.
+2. **Tourist/leisure station campaigns:** Place QR codes and promotions at the most popular casual start stations.
+3. **Flexible membership options:** Promote “seasonal” or “weekend” memberships to reduce commitment barriers for casual riders.
+
+## Appendix: Save plots
+```{r save_plots, eval=FALSE}
+ggsave("rides_by_day_of_week.png", width = 10, height = 6)
+ggsave("rides_by_hour.png", width = 10, height = 6)
+```
