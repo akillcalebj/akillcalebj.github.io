@@ -2,11 +2,12 @@
 title: "Cyclistic Bike-Share Case Study (Divvy Q1 2019 + Q1 2020)"
 author: "Caleb"
 date: "`r Sys.Date()`"
-output: 
+output:
   html_document:
     toc: true
     toc_float: true
     number_sections: true
+    self_contained: true
 ---
 
 ## 1. Ask
